@@ -91,14 +91,22 @@ pub fn sign(message: &str, sks: &[Scalar]) -> Vec<SchnorrSignature> {
         panic!("Aborting due to failed commitment verification");
     }
 
-    // Step 4: Each participant generates their partial signatures
+    // Step 4: Aggregate commitments
+    let mut aggregate_commitments = commitments[0];
+    for i in 1..commitments.len() {
+        aggregate_commitments += commitments[i];
+    }
+
+    // Step 5: Compute random challenge
+    let aggregate_commitments_bytes = aggregate_commitments.to_bytes().to_vec();
+    let message_bytes = message.as_bytes().to_vec();
+    let c = hash(&[aggregate_commitments_bytes.as_slice(), message_bytes.as_slice()].concat());
+
+    // Step 6: Each participant generates their partial signatures
     let mut signatures = Vec::new();
     for (i, sk) in sks.iter().enumerate() {
         let gr = group_array[i];
-        let gr_bytes = gr.compress().as_bytes().to_vec();
-        let message_bytes = message.as_bytes().to_vec();
-        let e = hash(&[gr_bytes.as_slice(), message_bytes.as_slice()].concat());
-        let s = rs[i] + e * sk;
+        let s = rs[i] + c * sk;  // `c` is the aggregated challenge from above
         signatures.push(SchnorrSignature { gr, s });
     }
 
@@ -107,7 +115,7 @@ pub fn sign(message: &str, sks: &[Scalar]) -> Vec<SchnorrSignature> {
 
 fn main() {
     // Number of parties
-    let n = 3;
+    let n = 5;
 
     // Key generation
     let (sks, pks) = keygen(n);
