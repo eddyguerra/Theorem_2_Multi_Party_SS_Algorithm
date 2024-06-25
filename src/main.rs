@@ -52,7 +52,7 @@ fn hash(data: &[u8]) -> Scalar {
 pub fn sign(message: &str, sks: &[Scalar]) -> Vec<SchnorrSignature> {
     let mut csprng = OsRng;
     let mut rs = Vec::new();
-    let mut group_array = Vec::new();
+    let mut grs = Vec::new();
     let mut commitments = Vec::new();
 
     // Step 1: Each participant generates random values r and their commitments
@@ -62,13 +62,13 @@ pub fn sign(message: &str, sks: &[Scalar]) -> Vec<SchnorrSignature> {
         let r = Scalar::from_bytes_mod_order(r_bytes);
         let gr = RistrettoPoint::mul_base(&r);
         rs.push(r);
-        group_array.push(gr);
+        grs.push(gr);
         commitments.push(hash(&gr.compress().as_bytes().to_vec()));
     }
 
     // Step 2: Each participant sends their decommitment
     for i in 0..sks.len() {
-        println!("Party {} sends decommitment: {:?}", i + 1, group_array[i]);
+        println!("Party {} sends decommitment: {:?}", i + 1, grs[i]);
     }
 
     // Step 3: Each participant verifies the commitments of the other parties
@@ -76,7 +76,7 @@ pub fn sign(message: &str, sks: &[Scalar]) -> Vec<SchnorrSignature> {
     for i in 0..sks.len() {
         for j in 0..sks.len() {
             if i != j {
-                let expected_commitment = hash(&group_array[j].compress().as_bytes().to_vec());
+                let expected_commitment = hash(&grs[j].compress().as_bytes().to_vec());
                 if commitments[j] == expected_commitment {
                     println!("Party {} verified commitment of party {} successfully", i + 1, j + 1);
                 } else {
@@ -105,7 +105,7 @@ pub fn sign(message: &str, sks: &[Scalar]) -> Vec<SchnorrSignature> {
     // Step 6: Each participant generates their partial signatures
     let mut signatures = Vec::new();
     for (i, sk) in sks.iter().enumerate() {
-        let gr = group_array[i];
+        let gr = grs[i];
         let s = rs[i] + c * sk;  // `c` is the aggregated challenge from above
         signatures.push(SchnorrSignature { gr, s });
     }
