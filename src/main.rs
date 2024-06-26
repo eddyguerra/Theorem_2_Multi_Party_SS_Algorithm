@@ -92,13 +92,13 @@ pub fn sign(message: &str, sks: &[Scalar]) -> Vec<SchnorrSignature> {
     }
 
     // Step 4: Aggregate commitments
-    let mut aggregate_commitments = commitments[0];
-    for i in 1..commitments.len() {
-        aggregate_commitments += commitments[i];
+    let mut aggregate_commitments = grs[0];
+    for i in 1..grs.len() {
+        aggregate_commitments += grs[i];
     }
 
     // Step 5: Compute random challenge
-    let aggregate_commitments_bytes = aggregate_commitments.to_bytes().to_vec();
+    let aggregate_commitments_bytes = aggregate_commitments.compress().as_bytes().to_vec();
     let message_bytes = message.as_bytes().to_vec();
     let c = hash(&[aggregate_commitments_bytes.as_slice(), message_bytes.as_slice()].concat());
 
@@ -111,6 +111,40 @@ pub fn sign(message: &str, sks: &[Scalar]) -> Vec<SchnorrSignature> {
     }
 
     signatures
+}
+
+// Function to aggregate signatures
+fn aggregate_signatures(signatures: &[SchnorrSignature]) -> SchnorrSignature {
+    let mut gr_agg = signatures[0].gr;
+    let mut s_agg = signatures[0].s;
+
+    for sig in &signatures[1..] {
+        gr_agg += sig.gr;
+        s_agg += sig.s;
+    }
+
+    SchnorrSignature { gr: gr_agg, s: s_agg }
+}
+
+// Function to aggregate public keys
+fn aggregate_public_keys(pks: &[RistrettoPoint]) -> RistrettoPoint {
+    let mut pk_agg = pks[0];
+    for pk in &pks[1..] {
+        pk_agg += pk;
+    }
+    pk_agg
+}
+
+// Function to verify aggregated signature
+fn verify_aggregate_signature(message: &str, agg_sig: &SchnorrSignature, agg_pk: &RistrettoPoint) -> bool {
+    let gr_bytes = agg_sig.gr.compress().as_bytes().to_vec();
+    let message_bytes = message.as_bytes().to_vec();
+    let c = hash(&[gr_bytes.as_slice(), message_bytes.as_slice()].concat());
+    let g_s_agg = RistrettoPoint::mul_base(&agg_sig.s);
+    let c_pk_agg = c * agg_pk;
+    let rhs = agg_sig.gr + c_pk_agg;
+
+    g_s_agg == rhs
 }
 
 fn main() {
@@ -132,4 +166,16 @@ fn main() {
     for (i, signature) in signatures.iter().enumerate() {
         println!("Party {} - Signature: {:?}", i + 1, signature);
     }
+
+    // Aggregate signatures and public keys
+    let agg_sig = aggregate_signatures(&signatures);
+    let agg_pk = aggregate_public_keys(&pks);
+
+    println!("Aggregated Signature: {:?}", agg_sig);
+    println!("Aggregated Public Key: {:?}", agg_pk);
+
+    // Verify the aggregated signature
+    let is_valid = verify_aggregate_signature(message, &agg_sig, &agg_pk);
+    println!("Is the aggregated signature valid? {}", is_valid);
 }
+
