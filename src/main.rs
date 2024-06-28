@@ -56,7 +56,7 @@ pub fn sign(message: &str, sks: &[Scalar]) -> Vec<SchnorrSignature> {
     let mut commitments = Vec::new();
 
     // Step 1: Each participant generates random values r and their commitments
-    for _ in sks {
+    for (i, sk) in sks.iter().enumerate() {
         let mut r_bytes = [0u8; 32];
         csprng.fill_bytes(&mut r_bytes);
         let r = Scalar::from_bytes_mod_order(r_bytes);
@@ -64,11 +64,12 @@ pub fn sign(message: &str, sks: &[Scalar]) -> Vec<SchnorrSignature> {
         rs.push(r);
         grs.push(gr);
         commitments.push(hash(&gr.compress().as_bytes().to_vec()));
+        println!("Party {} broadcasts commitment: {:?}", i + 1, commitments[i]);
     }
 
     // Step 2: Each participant sends their decommitment
     for i in 0..sks.len() {
-        println!("Party {} sends decommitment: {:?}", i + 1, grs[i]);
+        println!("Party {} broadcasts decommitment: {:?}", i + 1, grs[i]);
     }
 
     // Step 3: Each participant verifies the commitments of the other parties
@@ -91,16 +92,16 @@ pub fn sign(message: &str, sks: &[Scalar]) -> Vec<SchnorrSignature> {
         panic!("Aborting due to failed commitment verification");
     }
 
-    // Step 4: Aggregate commitments
-    let mut aggregate_commitments = grs[0];
+    // Step 4: Aggregate gr-values
+    let mut aggregate_grs = grs[0];
     for i in 1..grs.len() {
-        aggregate_commitments += grs[i];
+        aggregate_grs += grs[i];
     }
 
     // Step 5: Compute random challenge
-    let aggregate_commitments_bytes = aggregate_commitments.compress().as_bytes().to_vec();
+    let aggregate_grs_bytes = aggregate_grs.compress().as_bytes().to_vec();
     let message_bytes = message.as_bytes().to_vec();
-    let c = hash(&[aggregate_commitments_bytes.as_slice(), message_bytes.as_slice()].concat());
+    let c = hash(&[aggregate_grs_bytes.as_slice(), message_bytes.as_slice()].concat());
 
     // Step 6: Each participant generates their partial signatures
     let mut signatures = Vec::new();
@@ -141,10 +142,7 @@ fn verify_aggregate_signature(message: &str, agg_sig: &SchnorrSignature, agg_pk:
     let message_bytes = message.as_bytes().to_vec();
     let c = hash(&[gr_bytes.as_slice(), message_bytes.as_slice()].concat());
     let g_s_agg = RistrettoPoint::mul_base(&agg_sig.s);
-    let c_pk_agg = c * agg_pk;
-    let rhs = agg_sig.gr + c_pk_agg;
-
-    g_s_agg == rhs
+    g_s_agg == (agg_sig.gr + c * agg_pk)
 }
 
 fn main() {
@@ -168,6 +166,8 @@ fn main() {
     }
 
     // Aggregate signatures and public keys
+    // for loop over the partial signatures
+        // Verify partial signature i
     let agg_sig = aggregate_signatures(&signatures);
     let agg_pk = aggregate_public_keys(&pks);
 
