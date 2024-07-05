@@ -49,7 +49,7 @@ fn hash(data: &[u8]) -> Scalar {
 }
 
 // Signing process for n parties
-pub fn sign(message: &str, sks: &[Scalar]) -> Vec<SchnorrSignature> {
+pub fn sign(message: &str, sks: &[Scalar]) -> (Vec<SchnorrSignature>, Vec<RistrettoPoint>) {
     let mut csprng = OsRng;
     let mut rs = Vec::new();
     let mut grs = Vec::new();
@@ -111,49 +111,40 @@ pub fn sign(message: &str, sks: &[Scalar]) -> Vec<SchnorrSignature> {
         signatures.push(SchnorrSignature { gr, s });
     }
 
+    (signatures, grs)
+}
+
+// Combined function to verify partial signatures and aggregate both signatures and public keys
+fn verify_and_aggregate(signatures: &[SchnorrSignature], sks: &[Scalar], pks: &[RistrettoPoint], grs: &[RistrettoPoint], message_bytes: &[u8]) -> (SchnorrSignature, RistrettoPoint) {
     // Step 7: Verify each partial signature
+    let aggregate_grs = grs.iter().fold(RistrettoPoint::default(), |acc, gr| acc + *gr);
+    let aggregate_grs_bytes = aggregate_grs.compress().as_bytes().to_vec();
+    let c = hash(&[aggregate_grs_bytes.as_slice(), message_bytes].concat());
+
     for (i, signature) in signatures.iter().enumerate() {
         let pk = RistrettoPoint::mul_base(&sks[i]);
-        let is_valid = verify_partial_signature(message, &signature, &pk, &grs, &message_bytes);
+        let g_s = RistrettoPoint::mul_base(&signature.s);
+        let is_valid = g_s == (signature.gr + c * pk);
         println!("Partial signature {} is valid: {}", i + 1, is_valid);
         if !is_valid {
             panic!("Aborting due to invalid partial signature");
         }
     }
 
-    signatures
-}
-
-// Function to verify a partial signature
-fn verify_partial_signature(_: &str, sig: &SchnorrSignature, pk: &RistrettoPoint, grs: &[RistrettoPoint], message_bytes: &[u8]) -> bool {
-    let aggregate_grs = grs.iter().fold(RistrettoPoint::default(), |acc, gr| acc + *gr);
-    let aggregate_grs_bytes = aggregate_grs.compress().as_bytes().to_vec();
-    let c = hash(&[aggregate_grs_bytes.as_slice(), message_bytes].concat());
-    let g_s = RistrettoPoint::mul_base(&sig.s);
-    g_s == (sig.gr + c * pk)
-}
-
-// Function to aggregate signatures
-fn aggregate_signatures(signatures: &[SchnorrSignature]) -> SchnorrSignature {
     let mut gr_agg = signatures[0].gr;
     let mut s_agg = signatures[0].s;
-
-
     for sig in &signatures[1..] {
         gr_agg += sig.gr;
         s_agg += sig.s;
     }
+    let agg_sig = SchnorrSignature { gr: gr_agg, s: s_agg };
 
-    SchnorrSignature { gr: gr_agg, s: s_agg }
-}
-
-// Function to aggregate public keys
-fn aggregate_public_keys(pks: &[RistrettoPoint]) -> RistrettoPoint {
     let mut pk_agg = pks[0];
     for pk in &pks[1..] {
         pk_agg += pk;
     }
-    pk_agg
+
+    (agg_sig, pk_agg)
 }
 
 // Function to verify aggregated signature
@@ -180,14 +171,13 @@ fn main() {
     let message = "how are you doing!";
 
     // Signing
-    let signatures = sign(message, &sks);
+    let (signatures, grs) = sign(message, &sks);
     for (i, signature) in signatures.iter().enumerate() {
         println!("Party {} - Signature: {:?}", i + 1, signature);
     }
 
     // Aggregate signatures and public keys
-    let agg_sig = aggregate_signatures(&signatures);
-    let agg_pk = aggregate_public_keys(&pks);
+    let (agg_sig, agg_pk) = verify_and_aggregate(&signatures, &sks, &pks, &grs, &message.as_bytes().to_vec());
 
     println!("Aggregated Signature: {:?}", agg_sig);
     println!("Aggregated Public Key: {:?}", agg_pk);
