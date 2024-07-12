@@ -115,14 +115,14 @@ pub fn sign(message: &str, sks: &[Scalar]) -> (Vec<SchnorrSignature>, Vec<Ristre
 }
 
 // Combined function to verify partial signatures and aggregate both signatures and public keys
-fn verify_and_aggregate(signatures: &[SchnorrSignature], sks: &[Scalar], pks: &[RistrettoPoint], grs: &[RistrettoPoint], message_bytes: &[u8]) -> (SchnorrSignature, RistrettoPoint) {
+fn verify_and_aggregate(signatures: &[SchnorrSignature], pks: &[RistrettoPoint], grs: &[RistrettoPoint], message_bytes: &[u8]) -> (SchnorrSignature, RistrettoPoint) {
     // Step 7: Verify each partial signature
     let aggregate_grs = grs.iter().fold(RistrettoPoint::default(), |acc, gr| acc + *gr);
     let aggregate_grs_bytes = aggregate_grs.compress().as_bytes().to_vec();
     let c = hash(&[aggregate_grs_bytes.as_slice(), message_bytes].concat());
 
     for (i, signature) in signatures.iter().enumerate() {
-        let pk = RistrettoPoint::mul_base(&sks[i]);
+        let pk = pks[i];
         let g_s = RistrettoPoint::mul_base(&signature.s);
         let is_valid = g_s == (signature.gr + c * pk);
         println!("Partial signature {} is valid: {}", i + 1, is_valid);
@@ -177,7 +177,7 @@ fn main() {
     }
 
     // Aggregate signatures and public keys
-    let (agg_sig, agg_pk) = verify_and_aggregate(&signatures, &sks, &pks, &grs, &message.as_bytes().to_vec());
+    let (agg_sig, agg_pk) = verify_and_aggregate(&signatures, &pks, &grs, &message.as_bytes().to_vec());
 
     println!("Aggregated Signature: {:?}", agg_sig);
     println!("Aggregated Public Key: {:?}", agg_pk);
