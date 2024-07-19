@@ -2,13 +2,25 @@ extern crate rand;
 extern crate sha2;
 extern crate curve25519_dalek;
 
+extern crate winter_fri;
+extern crate winter_crypto;
+extern crate winterfell;
+extern crate winter_math;
+
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use rand::rngs::OsRng;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::fmt;
+use winter_crypto::DefaultRandomCoin;
+use winter_crypto::hashers::Blake3_256;
+use winter_fri::{DefaultProverChannel, FriOptions, FriProver};
+use winter_math::fields::f128::BaseElement;
 
+mod polynomials;
+
+use polynomials::{PolynomialG, PolynomialS, lagrange_basis_polynomial, pad_to_next_power_of_2};
 #[derive(Debug)]
 // Schnorr Signature
 pub struct SchnorrSignature {
@@ -38,6 +50,7 @@ pub fn keygen(n: usize) -> (Vec<Scalar>, Vec<RistrettoPoint>) {
     (sks, pks)
 }
 
+
 // Hash function
 fn hash(data: &[u8]) -> Scalar {
     let mut hasher = Sha256::new();
@@ -47,6 +60,33 @@ fn hash(data: &[u8]) -> Scalar {
     hash_bytes.copy_from_slice(&result[..32]);
     Scalar::from_bytes_mod_order(hash_bytes)
 }
+
+// Preprocess to create SK and W polynomials
+pub fn preprocess(public_keys: &Vec<RistrettoPoint>, weights: Vec<Scalar>, n: usize) -> (PolynomialG, PolynomialS) {
+    let mut sk_poly = PolynomialG::zero();
+    let mut w_poly = PolynomialS::zero();
+
+    for i in 0..n {
+        let li = lagrange_basis_polynomial(i, n);
+        for coeff in &li.coeffs {
+            sk_poly.add_term(public_keys[i] * *coeff);
+            w_poly.add_term(weights[i] * *coeff);
+        }
+    }
+
+    (sk_poly, w_poly)
+}
+
+
+// Function to commit to polynomials using FRI
+pub fn commit_polynomial_s(poly: &PolynomialS) -> Vec<BaseElement> {
+    poly.coeffs.iter().map(|s| BaseElement::new(s.to_bytes()[0] as u128)).collect()
+}
+
+pub fn commit_polynomial_g(poly: &PolynomialG) -> Vec<BaseElement> {
+    poly.terms.iter().map(|t| BaseElement::new(t.compress().to_bytes()[0] as u128)).collect()
+}
+
 
 // Signing process for n parties
 pub fn sign(message: &str, sks: &[Scalar]) -> (Vec<SchnorrSignature>, Vec<RistrettoPoint>) {
@@ -166,6 +206,43 @@ fn main() {
         println!("Party {} - Secret Key: {:?}", i + 1, sks[i]);
         println!("Party {} - Public Key: {:?}", i + 1, pks[i]);
     }
+
+    // Define weights for participants
+    let weights: Vec<Scalar> = (1..=n).map(|i| Scalar::from(i as u64)).collect();
+
+    // Preprocess to get SK and W polynomials
+    let (sk_poly, w_poly) = preprocess(&pks, weights, n);
+
+    // Commit to polynomials using FRI
+    let mut sk_commitment = commit_polynomial_g(&sk_poly);
+    let mut w_commitment = commit_polynomial_s(&w_poly);
+
+    // Ensure the commitments are padded to the next power of 2
+    sk_commitment = pad_to_next_power_of_2(sk_commitment);
+    w_commitment = pad_to_next_power_of_2(w_commitment);
+
+    let domain_size = sk_commitment.len();
+    let num_queries = domain_size / 2; // Ensure the number of queries is less than the domain size
+    let fri_options = FriOptions::new(4, 2, domain_size - 1); // Updated according to the domain size
+
+    let mut prover_channel = DefaultProverChannel::<BaseElement, Blake3_256<BaseElement>, DefaultRandomCoin<Blake3_256<BaseElement>>>::new(domain_size, num_queries);
+    let mut prover = FriProver::new(fri_options);
+
+    prover.build_layers(&mut prover_channel, sk_commitment.clone());
+    let sk_positions = prover_channel.draw_query_positions(2); // Draw query positions for SK proof
+    let sk_proof = prover.build_proof(&sk_positions);
+
+    prover.build_layers(&mut prover_channel, w_commitment.clone());
+    let w_positions = prover_channel.draw_query_positions(2); // Draw query positions for W proof
+    let w_proof = prover.build_proof(&w_positions);
+
+    // The verification key can be the commitment to these proofs
+    let vk = (sk_proof, w_proof);
+
+    // Output the polynomials and their commitments
+    println!("SK Polynomial: {:?}", sk_poly);
+    println!("W Polynomial: {:?}", w_poly);
+    println!("Verification Key: {:?}", vk);
 
     // Message
     let message = "how are you doing!";
