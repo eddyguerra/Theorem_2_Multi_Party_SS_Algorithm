@@ -10,9 +10,10 @@ extern crate winter_math;
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::{RngCore, thread_rng};
 use sha2::{Digest, Sha256};
 use std::fmt;
+use rand::prelude::SliceRandom;
 use winter_crypto::DefaultRandomCoin;
 use winter_crypto::hashers::Blake3_256;
 use winter_fri::{DefaultProverChannel, FriOptions, FriProver};
@@ -154,9 +155,20 @@ pub fn sign(message: &str, sks: &[Scalar]) -> (Vec<SchnorrSignature>, Vec<Ristre
     (signatures, grs)
 }
 
+// Function to generate the polynomial B(x)
+fn generate_b_poly(subset: &Vec<usize>, n: usize) -> PolynomialS {
+    let mut b_poly = PolynomialS::zero();
+    for &i in subset.iter() {
+        let li = lagrange_basis_polynomial(i, n);
+        b_poly = b_poly.add(&li);
+    }
+    b_poly
+}
+
 // Combined function to verify partial signatures and aggregate both signatures and public keys
-fn verify_and_aggregate(signatures: &[SchnorrSignature], pks: &[RistrettoPoint], grs: &[RistrettoPoint], message_bytes: &[u8]) -> (SchnorrSignature, RistrettoPoint) {
-    // Step 7: Verify each partial signature
+fn verify_and_aggregate(signatures: &[SchnorrSignature], pks: &[RistrettoPoint], grs: &[RistrettoPoint], message_bytes: &[u8], subset: &Vec<usize>, weights: &[Scalar], n: usize) -> (SchnorrSignature, RistrettoPoint, Scalar) {
+
+    //Verify each partial signature
     let aggregate_grs = grs.iter().fold(RistrettoPoint::default(), |acc, gr| acc + *gr);
     let aggregate_grs_bytes = aggregate_grs.compress().as_bytes().to_vec();
     let c = hash(&[aggregate_grs_bytes.as_slice(), message_bytes].concat());
@@ -184,7 +196,18 @@ fn verify_and_aggregate(signatures: &[SchnorrSignature], pks: &[RistrettoPoint],
         pk_agg += pk;
     }
 
-    (agg_sig, pk_agg)
+    // Calculate threshold T
+    let mut threshold_t = Scalar::ZERO;
+    for &i in subset.iter() {
+        threshold_t += weights[i];
+    }
+    println!("Calculated threshold T: {:?}", threshold_t);
+
+    //Generate the polynomial B(x)
+    let b_poly = generate_b_poly(subset, n);
+    println!("B(x): {:?}", b_poly);
+
+    (agg_sig, pk_agg, threshold_t)
 }
 
 // Function to verify aggregated signature
@@ -198,7 +221,14 @@ fn verify_aggregate_signature(message: &str, agg_sig: &SchnorrSignature, agg_pk:
 
 fn main() {
     // Number of parties
-    let n = 5;
+    let n =5;
+
+    // Dynamically generate a subset of indices for B(x)
+    let mut indices: Vec<usize> = (0..n).collect();
+    let subset_size = (n / 2).max(1); // Ensure at least one element
+    let mut rng = thread_rng();
+    indices.shuffle(&mut rng);
+    let subset: Vec<usize> = indices.iter().cloned().take(subset_size).collect();
 
     // Key generation
     let (sks, pks) = keygen(n);
@@ -211,7 +241,7 @@ fn main() {
     let weights: Vec<Scalar> = (1..=n).map(|i| Scalar::from(i as u64)).collect();
 
     // Preprocess to get SK and W polynomials
-    let (sk_poly, w_poly) = preprocess(&pks, weights, n);
+    let (sk_poly, w_poly) = preprocess(&pks, weights.clone(), n);
 
     // Commit to polynomials using FRI
     let mut sk_commitment = commit_polynomial_g(&sk_poly);
@@ -254,10 +284,11 @@ fn main() {
     }
 
     // Aggregate signatures and public keys
-    let (agg_sig, agg_pk) = verify_and_aggregate(&signatures, &pks, &grs, &message.as_bytes().to_vec());
+    let (agg_sig, agg_pk, threshold_t) = verify_and_aggregate(&signatures, &pks, &grs, &message.as_bytes().to_vec(), &subset, &weights, n);
 
     println!("Aggregated Signature: {:?}", agg_sig);
     println!("Aggregated Public Key: {:?}", agg_pk);
+    println!("Threshold T: {:?}", threshold_t);
 
     // Verify the aggregated signature
     let is_valid = verify_aggregate_signature(message, &agg_sig, &agg_pk);
